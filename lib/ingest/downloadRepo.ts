@@ -16,6 +16,12 @@ export async function downloadRepoZip(repoUrl: string, id: string) {
   const res = await fetch(zipUrl);
 
   if (!res.ok) {
+    if (res.status === 404) {
+      throw new Error("Repository not found. Please check the URL and try again.");
+    } else if (res.status === 403) {
+      throw new Error("Access denied. The repository may be private or you may have hit a rate limit.");
+    }
+
     throw new Error("Failed to download repo");
   }
 
