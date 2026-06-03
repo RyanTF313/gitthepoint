@@ -1,4 +1,4 @@
-import fs from "fs";
+import fs from "fs/promises";
 import path from "path";
 
 const IGNORE_DIRS = [
@@ -25,22 +25,19 @@ const ALLOWED_EXT = [
   ".css",
 ];
 
-export function getAllFiles(dir: string): string[] {
-  let results: string[] = [];
+export async function getAllFiles(dir: string): Promise<string[]> {
+  const results: string[] = [];
+  const entries = await fs.readdir(dir, { withFileTypes: true });
 
-  const list = fs.readdirSync(dir);
+  for (const entry of entries) {
+    const filePath = path.join(dir, entry.name);
 
-  for (const file of list) {
-    const filePath = path.join(dir, file);
-    const stat = fs.statSync(filePath);
-
-    if (stat.isDirectory()) {
-      if (IGNORE_DIRS.includes(file)) continue;
-
-      results = results.concat(getAllFiles(filePath));
-    } else {
-      const ext = path.extname(file);
-
+    if (entry.isDirectory()) {
+      if (IGNORE_DIRS.includes(entry.name)) continue;
+      const nested = await getAllFiles(filePath);
+      results.push(...nested);
+    } else if (entry.isFile()) {
+      const ext = path.extname(entry.name);
       if (ALLOWED_EXT.includes(ext)) {
         results.push(filePath);
       }
@@ -50,13 +47,21 @@ export function getAllFiles(dir: string): string[] {
   return results;
 }
 
-export function readFiles(filePaths: string[]) {
-  return filePaths.map((file) => {
-    const content = fs.readFileSync(file, "utf-8");
+export async function readFiles(filePaths: string[]) {
+  const results: Array<{ path: string; content: string }> = [];
+  const CONCURRENCY = 50;
 
-    return {
-      path: file,
-      content,
-    };
-  });
+  for (let i = 0; i < filePaths.length; i += CONCURRENCY) {
+    const chunk = filePaths.slice(i, i + CONCURRENCY);
+    const batch = await Promise.all(
+      chunk.map(async (file) => ({
+        path: file,
+        content: await fs.readFile(file, "utf-8"),
+      })),
+    );
+
+    results.push(...batch);
+  }
+
+  return results;
 }

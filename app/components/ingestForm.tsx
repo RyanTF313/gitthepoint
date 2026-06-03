@@ -1,11 +1,14 @@
 "use client";
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 
 export default function IngestForm() {
   const [repoUrl, setRepoUrl] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+    const [progressState, setProgressState] = useState<{ percent: number; message: string; stage?: string }>({ percent: 0, message: "" });
+  const pollRef = useRef<string | null>(null);
+  
   const router = useRouter();
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -20,18 +23,40 @@ export default function IngestForm() {
         body: JSON.stringify({ repoUrl }),
       });
 
-      if (!response.ok) throw new Error("Failed to ingest repository");
+      if (!response.ok) throw new Error("Failed to start ingestion");
       const data = await response.json();
       const repoId = data.result.id;
 
-      // Redirect to results page
-      router.push(`/results/${repoId}`);
+      // start polling status
+      pollRef.current = repoId;
+      setProgressState({ percent: 0, message: "Queued", stage: "queued" });
+      const interval = setInterval(async () => {
+        try {
+          const s = await fetch(`/api/ingest/status/${repoId}`);
+          if (!s.ok) return;
+          const jd = await s.json();
+          const p = jd.progress;
+          setProgressState({ percent: p.percent ?? 0, message: p.message ?? p.stage, stage: p.stage });
+          if (p.complete) {
+            clearInterval(interval);
+            router.push(`/results/${repoId}`);
+          }
+        } catch (e) {
+          console.log("Status polling error:", e);
+        }
+      }, 1000);
     } catch (err) {
       setError(err instanceof Error ? err.message : "An error occurred");
-    } finally {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    return () => {
+      // cleanup if component unmounts
+      pollRef.current = null;
+    };
+  }, []);
 
   return (
     <div className="flex items-center justify-center">
@@ -55,6 +80,17 @@ export default function IngestForm() {
         >
           {loading ? "Analyzing Repository..." : "Analyze Repo"}
         </button>
+        {loading && (
+          <div className="mt-4">
+            <div className="w-full bg-gray-200 rounded-full h-3">
+              <div
+                className="bg-blue-600 h-3 rounded-full"
+                style={{ width: `${progressState.percent}%`, transition: "width 300ms" }}
+              />
+            </div>
+            <p className="mt-2 text-sm text-gray-700">{progressState.message}</p>
+          </div>
+        )}
         {error && <p className="mt-3 text-red-600 text-sm">{error}</p>}
       </form>
     </div>

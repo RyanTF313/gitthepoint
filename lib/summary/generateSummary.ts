@@ -1,5 +1,6 @@
-import OpenAI from "openai";
 import { getOrCreateCollection } from "../vectorStore/chroma";
+import { openaiClient as client } from "@/lib/openai/client";
+import { withRetry } from "@/lib/utils/retry";
 
 interface ChunkMeta {
   file?: string;
@@ -8,19 +9,21 @@ interface ChunkMeta {
   [key: string]: unknown;
 }
 
-const client = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY!,
-});
+// const client = new OpenAI({
+//   apiKey: process.env.OPENAI_API_KEY!,
+// });
 
 export async function generateSummary(repoId: string) {
   const collection = await getOrCreateCollection(repoId);
 
-  const res = await client.embeddings.create({
-    model: "text-embedding-3-small",
-    input: "project structure architecture entry points package.json README main files"
-  });
+  const embeddingRes = await withRetry(() =>
+    client.embeddings.create({
+      model: "text-embedding-3-small",
+      input: "project structure architecture entry points package.json README main files",
+    }),
+  );
 
-  const queryEmbedding = res.data[0].embedding;
+  const queryEmbedding = embeddingRes.data[0].embedding;
 
   const results = await collection.query({
     queryEmbeddings: [queryEmbedding],

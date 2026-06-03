@@ -1,16 +1,12 @@
-import OpenAI from "openai";
 import { getOrCreateCollection } from "@/lib/vectorStore/chroma";
-
-const client = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY!,
-});
+import { openaiClient as client } from "@/lib/openai/client";
+import { withRetry } from "@/lib/utils/retry";
 
 export async function askQuestion(repoId: string, question: string) {
   // 1. Embed the query
-  const embeddingRes = await client.embeddings.create({
-    model: "text-embedding-3-small",
-    input: question,
-  });
+  const embeddingRes = await withRetry(() =>
+    client.embeddings.create({ model: "text-embedding-3-small", input: question }),
+  );
 
   const queryEmbedding = embeddingRes.data[0].embedding;
 

@@ -14,3 +14,6 @@ export function extractZip(zipPath: string, id: string) {
 
   return extractPath;
 }
+
+// Erica - langchain / langsmith for accuracies of the chatbot.
+// Deven.ai - vector dbs, chroma, weaviate, pinecone, qdrant, etc. for storing the embeddings and retrieving them efficiently.
