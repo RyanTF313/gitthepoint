@@ -10,11 +10,12 @@ Git The Point ingests repository source files, chunks and embeds them, stores ve
 ## What It Does
 
 - Accepts a GitHub repository URL
-- Downloads and extracts the repository archive
+- Downloads and extracts the repository archive (default branch via GitHub API)
 - Filters source-like files and chunks content by line boundaries
 - Generates embeddings with OpenAI (`text-embedding-3-small`)
 - Stores vectors + metadata in ChromaDB
 - Answers questions and generates summaries with OpenAI (`gpt-4.1-mini`)
+- Issues a per-repo access token (TTL) so `repoId` alone is not enough to query
 
 ## Tech Stack
 
@@ -26,59 +27,46 @@ Git The Point ingests repository source files, chunks and embeds them, stores ve
 
 ## High-Level Architecture
 
-1. `POST /api/ingest`
-2. `processRepo()` pipeline:
-	 - download repository zip
-	 - extract files
-	 - filter supported file types
-	 - chunk files
-	 - embed chunks
-	 - store vectors in Chroma
-3. Results page (`/results/[repoId]`) loads:
-	 - architecture summary (`POST /api/summary`)
-	 - chat interface (`POST /api/ask`)
-
-Core pipeline modules live in `lib/`:
-
-- `lib/ingest/*`
-- `lib/chunking/chunkFile.ts`
-- `lib/embeddings/embedChunks.ts`
-- `lib/vectorStore/*`
-- `lib/rag/askQuestion.ts`
-- `lib/summary/generateSummary.ts`
-
-## Project Structure
-
-```text
-app/
-	api/
-		ingest/route.ts      # Ingests and indexes a repository
-		ask/route.ts         # Q&A endpoint over indexed vectors
-		summary/route.ts     # Architecture summary endpoint
-	results/[repoId]/      # Analysis UI
-lib/
-	ingest/                # Download/extract/filter repository files
-	chunking/              # Chunking logic
-	embeddings/            # OpenAI embedding calls
-	vectorStore/           # Chroma collection and writes
-	rag/                   # Question answering flow
-	summary/               # Summary generation flow
-```
+1. `POST /api/ingest` starts an async job and returns `jobId` immediately
+2. Client polls `GET /api/ingest/status/[jobId]` for percent/stage + final tokens
+3. `processRepo()` pipeline:
+   - download repository zip (size-capped)
+   - safe-extract files
+   - filter supported file types (async, with secret-ish filename skips)
+   - chunk files
+   - embed chunks in rate-limited batches with retries
+   - store vectors in Chroma (batched)
+   - register repo metadata + access token
+4. Results page (`/results/[repoId]?token=...`) loads:
+   - architecture summary (`POST /api/summary`)
+   - file highlights (`POST /api/files`)
+   - chat interface (`POST /api/ask`, multi-turn)
 
 ## Prerequisites
 
 - Node.js 20+
 - npm 10+
-- Running ChromaDB instance (default expected at `http://localhost:8000`)
+- Running ChromaDB instance (default `http://localhost:8000`)
 - OpenAI API key
 
 ## Environment Variables
 
-Create a `.env.local` file in the project root:
+Copy `.env.example` to `.env.local` and fill in values:
 
 ```bash
-OPENAI_API_KEY=your_openai_api_key
+cp .env.example .env.local
 ```
+
+Notable variables:
+
+| Variable | Purpose |
+|----------|---------|
+| `OPENAI_API_KEY` | Required for embeddings + chat |
+| `CHROMA_URL` | Chroma HTTP endpoint (default `http://localhost:8000`) |
+| `API_SECRET` | Optional global gate for all API routes |
+| `GITHUB_TOKEN` | Optional; improves GitHub API rate limits |
+| `MAX_ZIP_BYTES` / `MAX_FILES` / `MAX_CHUNKS` | Resource caps |
+| `REPO_TTL_MS` | Access-token lifetime for indexed repos |
 
 ## Local Development
 
@@ -117,93 +105,91 @@ http://localhost:3000
 
 ### `POST /api/ingest`
 
-Request:
-
-```json
-{
-	"repoUrl": "https://github.com/owner/repo"
-}
-```
-
-Response:
-
-```json
-{
-	"ok": true,
-	"result": {
-		"id": "<repo-id>",
-		"chunkCount": 123
-	}
-}
-```
-
-### `POST /api/summary`
+Starts an async ingest job.
 
 Request:
 
 ```json
 {
-	"repoId": "<repo-id>"
+  "repoUrl": "https://github.com/owner/repo"
 }
 ```
 
-Response:
+Response `202`:
 
 ```json
 {
-	"summary": "..."
+  "ok": true,
+  "jobId": "<job-id>",
+  "result": { "id": "<job-id>" }
 }
 ```
 
-### `POST /api/ask`
+### `GET /api/ingest/status/[id]`
 
-Request:
+Poll progress. On completion, `progress.complete` is true and `result` includes the access token:
 
 ```json
 {
-	"repoId": "<repo-id>",
-	"question": "How is auth implemented?"
+  "ok": true,
+  "progress": {
+    "percent": 100,
+    "stage": "done",
+    "message": "ingestion complete",
+    "complete": true
+  },
+  "result": {
+    "id": "<repo-id>",
+    "accessToken": "<token>",
+    "chunkCount": 123,
+    "expiresInMs": 86400000
+  }
 }
 ```
 
-Response:
+### `POST /api/summary` / `POST /api/ask` / `POST /api/files`
+
+Require `repoId` plus `accessToken` (body, `x-repo-token` header, or `?token=`).
+
+`/api/ask` also accepts `history` for multi-turn chat:
 
 ```json
 {
-	"answer": "...",
-	"sources": [
-		{
-			"file": "app/api/auth/route.ts",
-			"startLine": 12,
-			"endLine": 45
-		}
-	]
+  "repoId": "<repo-id>",
+  "accessToken": "<token>",
+  "question": "How is auth implemented?",
+  "history": [
+    { "role": "user", "content": "What is this repo?" },
+    { "role": "assistant", "content": "..." }
+  ]
 }
 ```
+
+### `POST /api/contact`
+
+Accepts `multipart/form-data` with `name`, `email`, `message`. Rate-limited; currently logs submissions (no mail provider wired).
+
+## Security & Limits
+
+- Optional `API_SECRET` for all routes
+- Per-IP rate limits on ingest / ask / summary / contact
+- Zip path traversal protection
+- Download / file / chunk size caps
+- Temp zip + extract directories cleaned after ingest
+- Per-repo access tokens with TTL (in-memory registry)
+- Safe client error messages (details logged server-side)
 
 ## Current Limitations
 
-- Ingestion currently downloads `main.zip`; repositories using only `master` (or another default branch) may fail.
-- Only a fixed allow-list of file extensions is indexed (`.js`, `.ts`, `.tsx`, `.jsx`, `.py`, `.java`, `.go`, `.rb`, `.md`, `.json`, `.html`, `.css`).
-- Chroma endpoint is currently hardcoded to `http://localhost:8000`.
-- Temporary files are written under `/tmp`.
+- Repo registry / job queue are in-memory (lost on process restart; not multi-instance safe)
+- Only a fixed allow-list of file extensions is indexed
+- Temporary files use `/tmp` during ingest
+- Contact form does not send email yet
 
 ## Troubleshooting
 
-- `Invalid GitHub URL`
-	- Ensure URL format is `https://github.com/<owner>/<repo>`.
-- `Repository not found`
-	- Verify repo exists and is public.
-- `Access denied` during download
-	- GitHub may be rate-limiting requests or repo is private.
-- OpenAI errors
-	- Confirm `OPENAI_API_KEY` is set in `.env.local`.
-- Chroma connection errors
-	- Verify Chroma is running and reachable on port `8000`.
-
-## Recommended Next Improvements
-
-- Resolve default branch dynamically via GitHub API instead of assuming `main`.
-- Add persistent metadata storage for indexed repositories.
-- Add end-to-end tests for ingest, summary, and ask flows.
-- Make Chroma URL configurable via environment variable.
+- `Invalid GitHub URL` — use `https://github.com/<owner>/<repo>`
+- `Repository not found` — verify the repo exists and is public
+- `Missing repository access token` — re-run ingest; open the results link with `?token=`
+- OpenAI errors — confirm `OPENAI_API_KEY` in `.env.local`
+- Chroma connection errors — verify `CHROMA_URL` and that Chroma is running

@@ -1,27 +1,48 @@
 "use client";
 import { useEffect, useState } from "react";
+import {
+  getRepoAccessToken,
+  saveRepoAccessToken,
+} from "@/lib/client/repoAuth";
 
 interface ArchitectureSummaryProps {
   repoId: string;
+  accessToken?: string;
 }
 
-export default function ArchitectureSummary({ repoId }: ArchitectureSummaryProps) {
+export default function ArchitectureSummary({
+  repoId,
+  accessToken,
+}: ArchitectureSummaryProps) {
   const [summary, setSummary] = useState<string>("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
   useEffect(() => {
+    if (accessToken) {
+      saveRepoAccessToken(repoId, accessToken);
+    }
+
     const fetchSummary = async () => {
+      const token = accessToken || getRepoAccessToken(repoId);
+      if (!token) {
+        setError("Missing access token. Re-analyze the repository.");
+        setLoading(false);
+        return;
+      }
+
       try {
         setLoading(true);
         const response = await fetch("/api/summary", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ repoId }),
+          body: JSON.stringify({ repoId, accessToken: token }),
         });
 
-        if (!response.ok) throw new Error("Failed to fetch summary");
         const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data.error || "Failed to fetch summary");
+        }
         setSummary(data.summary || "");
       } catch (err) {
         setError(err instanceof Error ? err.message : "An error occurred");
@@ -33,7 +54,7 @@ export default function ArchitectureSummary({ repoId }: ArchitectureSummaryProps
     if (repoId) {
       fetchSummary();
     }
-  }, [repoId]);
+  }, [repoId, accessToken]);
 
   if (loading) {
     return (

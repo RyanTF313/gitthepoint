@@ -1,20 +1,36 @@
 "use client";
-import { useState, useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { saveRepoAccessToken } from "@/lib/client/repoAuth";
+
+type ProgressState = {
+  percent: number;
+  message: string;
+  stage?: string;
+};
 
 export default function IngestForm() {
   const [repoUrl, setRepoUrl] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-    const [progressState, setProgressState] = useState<{ percent: number; message: string; stage?: string }>({ percent: 0, message: "" });
-  const pollRef = useRef<string | null>(null);
-  
+  const [progressState, setProgressState] = useState<ProgressState>({
+    percent: 0,
+    message: "",
+  });
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const router = useRouter();
+
+  useEffect(() => {
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
     setLoading(true);
+    setProgressState({ percent: 0, message: "Starting…", stage: "queued" });
 
     try {
       const response = await fetch("/api/ingest", {
@@ -23,44 +39,67 @@ export default function IngestForm() {
         body: JSON.stringify({ repoUrl }),
       });
 
-      if (!response.ok) throw new Error("Failed to start ingestion");
       const data = await response.json();
-      const repoId = data.result.id;
+      if (!response.ok) {
+        throw new Error(data.error || "Failed to start ingestion");
+      }
 
-      // start polling status
-      pollRef.current = repoId;
-      setProgressState({ percent: 0, message: "Queued", stage: "queued" });
-      const interval = setInterval(async () => {
+      const jobId = data.jobId || data.result?.id;
+      if (!jobId) {
+        throw new Error("Missing job id from ingest response");
+      }
+
+      if (pollRef.current) clearInterval(pollRef.current);
+
+      pollRef.current = setInterval(async () => {
         try {
-          const s = await fetch(`/api/ingest/status/${repoId}`);
-          if (!s.ok) return;
-          const jd = await s.json();
-          const p = jd.progress;
-          setProgressState({ percent: p.percent ?? 0, message: p.message ?? p.stage, stage: p.stage });
-          if (p.complete) {
-            clearInterval(interval);
-            router.push(`/results/${repoId}`);
+          const statusRes = await fetch(`/api/ingest/status/${jobId}`);
+          const statusData = await statusRes.json();
+
+          if (!statusRes.ok) {
+            throw new Error(statusData.error || "Failed to check ingest status");
           }
-        } catch (e) {
-          console.log("Status polling error:", e);
+
+          const progress = statusData.progress;
+          setProgressState({
+            percent: progress?.percent ?? 0,
+            message: progress?.message ?? progress?.stage ?? "Working…",
+            stage: progress?.stage,
+          });
+
+          if (progress?.error || statusData.error) {
+            if (pollRef.current) clearInterval(pollRef.current);
+            setLoading(false);
+            setError(progress?.error || statusData.error || "Ingest failed");
+            return;
+          }
+
+          if (progress?.complete && statusData.result?.accessToken) {
+            if (pollRef.current) clearInterval(pollRef.current);
+            const result = statusData.result;
+            saveRepoAccessToken(result.id, result.accessToken);
+            router.push(
+              `/results/${result.id}?token=${encodeURIComponent(result.accessToken)}`,
+            );
+          }
+        } catch (err) {
+          if (pollRef.current) clearInterval(pollRef.current);
+          setLoading(false);
+          setError(err instanceof Error ? err.message : "An error occurred");
         }
       }, 1000);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "An error occurred");
       setLoading(false);
+      setError(err instanceof Error ? err.message : "An error occurred");
     }
   };
 
-  useEffect(() => {
-    return () => {
-      // cleanup if component unmounts
-      pollRef.current = null;
-    };
-  }, []);
-
   return (
     <div className="flex items-center justify-center">
-      <form onSubmit={handleSubmit} className="w-full max-w-md p-6 bg-white rounded-lg shadow-md">
+      <form
+        onSubmit={handleSubmit}
+        className="w-full max-w-md p-6 bg-white rounded-lg shadow-md"
+      >
         <label htmlFor="repoUrl" className="block text-sm font-medium mb-2">
           GitHub Repository URL
         </label>
@@ -84,8 +123,8 @@ export default function IngestForm() {
           <div className="mt-4">
             <div className="w-full bg-gray-200 rounded-full h-3">
               <div
-                className="bg-blue-600 h-3 rounded-full"
-                style={{ width: `${progressState.percent}%`, transition: "width 300ms" }}
+                className="bg-blue-600 h-3 rounded-full transition-[width] duration-300"
+                style={{ width: `${progressState.percent}%` }}
               />
             </div>
             <p className="mt-2 text-sm text-gray-700">{progressState.message}</p>

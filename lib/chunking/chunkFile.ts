@@ -1,14 +1,18 @@
 import { FileData, Chunk } from "@/app/types";
+import { normalizeRepoPath } from "@/lib/ingest/filterFiles";
 
-let MAX_CHARS = 1200; // ~300 tokens
-const OVERLAP_CHARS = 200; // overlap for context
+const DEFAULT_MAX_CHARS = 1200; // ~300 tokens
+const AUTH_CORE_MAX_CHARS = 800;
+const OVERLAP_CHARS = 200;
 
 export function chunkFile(file: FileData): Chunk[] {
-  if (file.path.includes("auth") || file.path.includes("core")) {
-    MAX_CHARS = 800;
-  }
-  const lines = file.content.split("\n");
+  const maxChars =
+    file.path.includes("auth") || file.path.includes("core")
+      ? AUTH_CORE_MAX_CHARS
+      : DEFAULT_MAX_CHARS;
 
+  const normalizedPath = normalizeRepoPath(file.path);
+  const lines = file.content.split("\n");
   const chunks: Chunk[] = [];
 
   let currentChunk: string[] = [];
@@ -19,21 +23,20 @@ export function chunkFile(file: FileData): Chunk[] {
     const line = lines[i];
     const lineLength = line.length + 1;
 
-    // If adding this line exceeds limit → finalize chunk
-    if (currentLength + lineLength > MAX_CHARS) {
+    if (currentLength + lineLength > maxChars && currentChunk.length > 0) {
       const chunkText = currentChunk.join("\n");
 
       if (chunkText.length > 1500) {
-        // 🔥 split oversized chunk again
-        const subChunks = splitLargeChunk(chunkText, file.path, startLine);
-        chunks.push(...subChunks);
+        chunks.push(
+          ...splitLargeChunk(chunkText, normalizedPath, startLine),
+        );
       } else {
         chunks.push({
-          file: file.path,
+          file: normalizedPath,
           content: chunkText,
           startLine,
           endLine: i - 1,
-          summaryHint: inferHint(file.path),
+          summaryHint: inferHint(normalizedPath),
         });
       }
 
@@ -42,22 +45,20 @@ export function chunkFile(file: FileData): Chunk[] {
 
       currentChunk = [...overlapLines];
       currentLength = overlapText.length;
-      startLine = i - overlapLines.length;
+      startLine = Math.max(0, i - overlapLines.length);
     }
 
     currentChunk.push(line);
     currentLength += lineLength;
   }
 
-  // Push final chunk
   if (currentChunk.length > 0) {
-    file.path = normalizePath(file.path);
     chunks.push({
-      file: file.path,
+      file: normalizedPath,
       content: currentChunk.join("\n"),
       startLine,
       endLine: lines.length - 1,
-      summaryHint: inferHint(file.path),
+      summaryHint: inferHint(normalizedPath),
     });
   }
 
@@ -66,15 +67,6 @@ export function chunkFile(file: FileData): Chunk[] {
 
 export function chunkFiles(files: FileData[]): Chunk[] {
   return files.flatMap(chunkFile);
-}
-
-function normalizePath(fullPath: string): string {
-  const parts = fullPath.split("/");
-
-  // Remove temp + repo wrapper folder
-  const repoIndex = parts.findIndex((p) => p.includes("repo-"));
-
-  return parts.slice(repoIndex + 2).join("/");
 }
 
 function inferHint(filePath: string): string {

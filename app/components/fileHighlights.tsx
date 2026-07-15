@@ -1,8 +1,13 @@
 "use client";
 import { useEffect, useState } from "react";
+import {
+  getRepoAccessToken,
+  saveRepoAccessToken,
+} from "@/lib/client/repoAuth";
 
 interface FileHighlightsProps {
   repoId: string;
+  accessToken?: string;
 }
 
 interface FilePreview {
@@ -12,57 +17,43 @@ interface FilePreview {
   endLine: number;
 }
 
-export default function FileHighlights({ repoId }: FileHighlightsProps) {
+export default function FileHighlights({
+  repoId,
+  accessToken,
+}: FileHighlightsProps) {
   const [fileStructure, setFileStructure] = useState<string[]>([]);
   const [filePreviews, setFilePreviews] = useState<FilePreview[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
   useEffect(() => {
+    const token = accessToken || getRepoAccessToken(repoId);
+    if (accessToken) {
+      saveRepoAccessToken(repoId, accessToken);
+    }
+
     const fetchFileHighlights = async () => {
+      if (!token) {
+        setError("Missing access token. Re-analyze the repository.");
+        setLoading(false);
+        return;
+      }
+
       try {
         setLoading(true);
-        // Query Chroma to get top documents (file chunks)
-        // We'll use a query that returns key files
-        const response = await fetch("/api/summary", {
+        const response = await fetch("/api/files", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ repoId }),
+          body: JSON.stringify({ repoId, accessToken: token }),
         });
 
-        if (!response.ok) throw new Error("Failed to fetch file data");
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data.error || "Failed to fetch file data");
+        }
 
-        // Simulate getting file structure from chunks
-        // In a real app, we'd have a dedicated endpoint for this
-        const mockStructure = [
-          "src/",
-          "  components/",
-          "  utils/",
-          "  types/",
-          "lib/",
-          "  api/",
-          "package.json",
-          "README.md",
-        ];
-        setFileStructure(mockStructure);
-
-        // Create mock file previews
-        const mockPreviews: FilePreview[] = [
-          {
-            file: "package.json",
-            snippet: "{\n  \"name\": \"repository\",\n  \"version\": \"1.0.0\"\n}",
-            startLine: 1,
-            endLine: 3,
-          },
-          {
-            file: "src/index.ts",
-            snippet:
-              "export function main() {\n  // Main entry point\n  console.log('Hello');\n}",
-            startLine: 1,
-            endLine: 4,
-          },
-        ];
-        setFilePreviews(mockPreviews);
+        setFileStructure(data.structure || []);
+        setFilePreviews(data.previews || []);
       } catch (err) {
         setError(err instanceof Error ? err.message : "An error occurred");
       } finally {
@@ -73,7 +64,7 @@ export default function FileHighlights({ repoId }: FileHighlightsProps) {
     if (repoId) {
       fetchFileHighlights();
     }
-  }, [repoId]);
+  }, [repoId, accessToken]);
 
   if (loading) {
     return (
@@ -102,33 +93,41 @@ export default function FileHighlights({ repoId }: FileHighlightsProps) {
 
       <div className="mb-6">
         <h3 className="text-lg font-semibold mb-3">Repository Structure</h3>
-        <div className="bg-gray-50 p-4 rounded font-mono text-sm">
-          {fileStructure.map((line, i) => (
-            <div key={i} className="text-gray-700">
-              {line}
-            </div>
-          ))}
+        <div className="bg-gray-50 p-4 rounded font-mono text-sm max-h-64 overflow-y-auto">
+          {fileStructure.length === 0 ? (
+            <div className="text-gray-500">No indexed files available.</div>
+          ) : (
+            fileStructure.map((line) => (
+              <div key={line} className="text-gray-700">
+                {line}
+              </div>
+            ))
+          )}
         </div>
       </div>
 
       <div>
         <h3 className="text-lg font-semibold mb-3">Key File Previews</h3>
         <div className="space-y-4">
-          {filePreviews.map((preview, i) => (
-            <div key={i} className="border rounded-lg overflow-hidden">
-              <div className="bg-gray-100 px-4 py-2 border-b">
-                <p className="font-mono text-sm font-semibold text-gray-800">
-                  {preview.file}
-                </p>
-                <p className="text-xs text-gray-600">
-                  Lines {preview.startLine}-{preview.endLine}
-                </p>
+          {filePreviews.length === 0 ? (
+            <p className="text-gray-500 text-sm">No key file previews found.</p>
+          ) : (
+            filePreviews.map((preview) => (
+              <div key={preview.file} className="border rounded-lg overflow-hidden">
+                <div className="bg-gray-100 px-4 py-2 border-b">
+                  <p className="font-mono text-sm font-semibold text-gray-800">
+                    {preview.file}
+                  </p>
+                  <p className="text-xs text-gray-600">
+                    Lines {preview.startLine}-{preview.endLine}
+                  </p>
+                </div>
+                <pre className="bg-gray-50 p-4 overflow-x-auto text-sm">
+                  <code className="text-gray-800">{preview.snippet}</code>
+                </pre>
               </div>
-              <pre className="bg-gray-50 p-4 overflow-x-auto text-sm">
-                <code className="text-gray-800">{preview.snippet}</code>
-              </pre>
-            </div>
-          ))}
+            ))
+          )}
         </div>
       </div>
     </div>

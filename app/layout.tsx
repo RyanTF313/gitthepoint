@@ -16,7 +16,8 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "Git The Point",
-  description: "Learn Git Repos with Interactive Visualizations",
+  description:
+    "Analyze public GitHub repositories with RAG-powered architecture summaries and Q&A",
 };
 
 export default function RootLayout({
@@ -29,7 +30,7 @@ export default function RootLayout({
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex 1 flex-col">
+      <body className="min-h-full flex flex-1 flex-col">
         <Header />
         {children}
         <Footer />

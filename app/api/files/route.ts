@@ -5,34 +5,26 @@ import {
   requireRepoAccess,
 } from "@/lib/api/auth";
 import { toErrorResponse } from "@/lib/api/errors";
-import { getClientIp, rateLimit } from "@/lib/api/rateLimit";
 import { requireRepoId } from "@/lib/api/validate";
-import { config } from "@/lib/config";
-import { generateSummary } from "@/lib/summary/generateSummary";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
 
 export async function POST(req: Request) {
   try {
     requireApiSecret(req);
 
-    const ip = getClientIp(req);
-    rateLimit(
-      `summary:${ip}`,
-      config.rateLimitSummaryPerMinute,
-      60 * 1000,
-      "Too many summary requests. Try again shortly.",
-    );
-
     const body = await req.json();
     const repoId = requireRepoId(body?.repoId);
     const accessToken = extractAccessToken(req, body?.accessToken);
-    requireRepoAccess(repoId, accessToken);
+    const record = requireRepoAccess(repoId, accessToken);
 
-    const summary = await generateSummary(repoId);
-
-    return NextResponse.json({ summary });
+    return NextResponse.json({
+      structure: record.structure,
+      previews: record.previews,
+      chunkCount: record.chunkCount,
+      repoUrl: record.repoUrl,
+      expiresAt: record.expiresAt,
+    });
   } catch (err) {
     return toErrorResponse(err);
   }

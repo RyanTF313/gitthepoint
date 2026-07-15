@@ -1,14 +1,29 @@
 import { ChromaClient } from "chromadb";
+import { config } from "@/lib/config";
 
-const client = new ChromaClient(
-  {
-    path: "http://localhost:8000",
+let client: ChromaClient | null = null;
+
+function getClient() {
+  if (!client) {
+    client = new ChromaClient({
+      path: config.chromaUrl,
+    });
   }
-);
+  return client;
+}
 
 export async function getOrCreateCollection(repoId: string) {
-  return client.getOrCreateCollection({
+  return getClient().getOrCreateCollection({
     name: `repo-${repoId}`,
-    embeddingFunction: null, // use my embedding logic instead of chroma's built in (which calls OpenAI for each embed, very slow + costly)
+    // Use app-side embeddings instead of Chroma's OpenAI embedding function.
+    embeddingFunction: null,
   });
+}
+
+export async function deleteCollection(repoId: string) {
+  try {
+    await getClient().deleteCollection({ name: `repo-${repoId}` });
+  } catch (err) {
+    console.error("Failed to delete Chroma collection:", err);
+  }
 }

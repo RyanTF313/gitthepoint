@@ -1,19 +1,34 @@
-import { NextResponse, NextRequest } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
+import { requireApiSecret } from "@/lib/api/auth";
+import { AppError, toErrorResponse } from "@/lib/api/errors";
 import { getProgress } from "@/lib/progress/progress";
 
-export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+export const runtime = "nodejs";
+
+export async function GET(
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> },
+) {
   try {
+    requireApiSecret(request);
+
     const { id } = await params;
-    const progress = getProgress(id);
-    if (!progress) {
-      return NextResponse.json({ ok: false, error: "not_found" }, { status: 404 });
+    if (!id) {
+      throw new AppError("id is required", 400, "VALIDATION_ERROR");
     }
 
-    return NextResponse.json({ ok: true, progress }, { status: 200 });
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  } catch (err: any) {
-    // eslint-disable-next-line no-console
-    console.error(err);
-    return NextResponse.json({ ok: false, error: err?.message || "error" }, { status: 500 });
+    const progress = getProgress(id);
+    if (!progress) {
+      throw new AppError("Job not found", 404, "JOB_NOT_FOUND");
+    }
+
+    return NextResponse.json({
+      ok: true,
+      progress,
+      result: progress.result,
+      error: progress.error,
+    });
+  } catch (err) {
+    return toErrorResponse(err);
   }
 }

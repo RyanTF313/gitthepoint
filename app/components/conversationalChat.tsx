@@ -1,6 +1,10 @@
 "use client";
 import { useState, useRef, useEffect } from "react";
 import { Source } from "../types";
+import {
+  getRepoAccessToken,
+  saveRepoAccessToken,
+} from "@/lib/client/repoAuth";
 
 interface Message {
   role: "user" | "assistant";
@@ -10,10 +14,12 @@ interface Message {
 
 interface ConversationalChatProps {
   repoId: string;
+  accessToken?: string;
 }
 
 export default function ConversationalChat({
   repoId,
+  accessToken,
 }: ConversationalChatProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
@@ -21,49 +27,69 @@ export default function ConversationalChat({
   const [error, setError] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  };
+  useEffect(() => {
+    if (accessToken) {
+      saveRepoAccessToken(repoId, accessToken);
+    }
+  }, [repoId, accessToken]);
 
   useEffect(() => {
-    scrollToBottom();
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!input.trim()) return;
 
+    const token = accessToken || getRepoAccessToken(repoId);
+    if (!token) {
+      setError("Missing access token. Re-analyze the repository.");
+      return;
+    }
+
     const userMessage = input;
     setInput("");
     setError("");
 
-    // Add user message to chat
-    setMessages((prev) => [...prev, { role: "user", content: userMessage }]);
-
+    const nextMessages: Message[] = [
+      ...messages,
+      { role: "user", content: userMessage },
+    ];
+    setMessages(nextMessages);
     setLoading(true);
 
     try {
+      const history = nextMessages.slice(0, -1).map((msg) => ({
+        role: msg.role,
+        content: msg.content,
+      }));
+
       const response = await fetch("/api/ask", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ repoId, question: userMessage }),
+        body: JSON.stringify({
+          repoId,
+          question: userMessage,
+          accessToken: token,
+          history,
+        }),
       });
 
-      if (!response.ok) throw new Error("Failed to get response");
       const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || "Failed to get response");
+      }
 
-      // Add assistant message to chat
       setMessages((prev) => [
         ...prev,
         {
           role: "assistant",
           content: data.answer || "No answer provided",
-          sources: data.sources || [],
+          sources: Array.isArray(data.sources) ? data.sources : [],
         },
       ]);
     } catch (err) {
       setError(err instanceof Error ? err.message : "An error occurred");
-      // Remove the user message if there was an error
       setMessages((prev) => prev.slice(0, -1));
     } finally {
       setLoading(false);
@@ -80,13 +106,15 @@ export default function ConversationalChat({
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
         {messages.length === 0 && (
           <div className="flex items-center justify-center h-full text-gray-500">
-            <p>Start a conversation by asking a question about the repository.</p>
+            <p>
+              Start a conversation by asking a question about the repository.
+            </p>
           </div>
         )}
 
         {messages.map((msg, i) => (
           <div
-            key={i}
+            key={`${msg.role}-${i}`}
             className={`flex ${
               msg.role === "user" ? "justify-end" : "justify-start"
             }`}
@@ -106,7 +134,7 @@ export default function ConversationalChat({
                   <div className="space-y-1">
                     {msg.sources.map((source, si) => (
                       <div
-                        key={si}
+                        key={`${source.file}-${source.startLine}-${si}`}
                         className="text-xs bg-opacity-50 bg-gray-200 rounded p-1"
                       >
                         <p className="font-mono">{source.file}</p>

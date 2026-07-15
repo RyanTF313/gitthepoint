@@ -12,7 +12,6 @@ export async function storeEmbeddings(repoId: string, embeddedChunks: EmbeddedCh
     const batchIndex = Math.floor(i / BATCH_SIZE) + 1;
     const totalBatches = Math.ceil(embeddedChunks.length / BATCH_SIZE);
 
-    // eslint-disable-next-line no-console
     console.log(`Storing batch ${batchIndex}/${totalBatches} (size=${batch.length}) to Chroma`);
 
     await withRetry(
@@ -31,7 +30,6 @@ export async function storeEmbeddings(repoId: string, embeddedChunks: EmbeddedCh
       { attempts: 5, baseDelayMs: 1000 },
     );
 
-    // eslint-disable-next-line no-console
     console.log(`Stored batch ${batchIndex}/${totalBatches} successfully`);
   }
 }

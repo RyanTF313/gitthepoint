@@ -1,31 +1,45 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
-import { processRepo } from "@/lib/pipeline/processRepos";
 import { NextResponse } from "next/server";
 import { v4 as uuidv4 } from "uuid";
+import { requireApiSecret } from "@/lib/api/auth";
+import { toErrorResponse } from "@/lib/api/errors";
+import { getClientIp, rateLimit } from "@/lib/api/rateLimit";
+import { parseGitHubRepoUrl, requireString } from "@/lib/api/validate";
+import { config } from "@/lib/config";
+import { processRepo } from "@/lib/pipeline/processRepos";
+import { initProgress } from "@/lib/progress/progress";
 
-// fire-and-forget processing: return id immediately and process in background
+export const runtime = "nodejs";
+export const maxDuration = 300;
 
 export async function POST(request: Request) {
   try {
-    const body = await request.json();
-    const { repoUrl } = body;
-    const jobId = uuidv4();
+    requireApiSecret(request);
 
-    // start background processing
-    processRepo(repoUrl, jobId).catch((err) => {
-      // eslint-disable-next-line no-console
+    const ip = getClientIp(request);
+    rateLimit(
+      `ingest:${ip}`,
+      config.rateLimitIngestPerHour,
+      60 * 60 * 1000,
+      "Too many ingest requests. Try again later.",
+    );
+
+    const body = await request.json();
+    const repoUrl = requireString(body?.repoUrl, "repoUrl", 500);
+    const { url } = parseGitHubRepoUrl(repoUrl);
+
+    const jobId = uuidv4();
+    initProgress(jobId, "queued");
+
+    // Fire-and-forget: client polls /api/ingest/status/[id]
+    void processRepo(url, jobId).catch((err) => {
       console.error("Background processing error:", err);
     });
 
-    return NextResponse.json({ ok: true, result: { id: jobId } }, { status: 200 });
-  } catch (err: any) {
-    // console.log(err)
-    console.error("API ERROR:", err);
-    console.error("MESSAGE:", err.message);
-
     return NextResponse.json(
-      { error: err.message || "Unknown error" },
-      { status: 500 },
+      { ok: true, jobId, result: { id: jobId } },
+      { status: 202 },
     );
+  } catch (err) {
+    return toErrorResponse(err);
   }
 }

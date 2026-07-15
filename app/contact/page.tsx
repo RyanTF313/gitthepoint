@@ -23,7 +23,7 @@ export default function ContactPage() {
             } else {
                 setMessage('Something went wrong. Please try again.');
             }
-        } catch (error) {
+        } catch {
             setMessage('Error submitting form.');
         } finally {
             setIsSubmitting(false);

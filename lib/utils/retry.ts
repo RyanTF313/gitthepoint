@@ -32,7 +32,6 @@ export async function withRetry<T>(
       const jitter = Math.floor(Math.random() * (backoff / 2));
       const delay = backoff + jitter;
 
-      // eslint-disable-next-line no-console
       console.warn(`Request failed with rate limit, retrying in ${delay}ms (attempt ${attempt + 1})`);
       await new Promise((r) => setTimeout(r, delay));
     }
